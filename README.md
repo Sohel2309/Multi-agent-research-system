@@ -122,7 +122,7 @@ streamlit run app.py
 
 Open **http://localhost:8501** in your browser.
 
-
+---
 ## Project Structure
 
 ```
