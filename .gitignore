@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+sessions.db
+.venv/
+venv/
+MultiA311/
