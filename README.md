@@ -34,13 +34,15 @@ Final Report + Verdict (PASS / PASS WITH WARNINGS / FAIL)
 
 After the Research Agent finishes, the Analyst Agent and Extra Search Agent run **simultaneously** via `asyncio.gather` — one analyzes the findings while the other gathers additional statistics. The Writer Agent waits for both, then produces a richer report using all gathered context.
 
-Each agent is powered by **Llama 3.3 70B via Groq** and orchestrated using **LangGraph** state machines with conditional routing and shared state management.
+Each agent is powered by **OpenAI GPT-OSS 120B via Groq** and orchestrated using **LangGraph** state machines with conditional routing and shared state management. (Originally built on Llama 3.3 70B; migrated after Groq deprecated that model on 2026-08-16 — see [Groq's deprecation notice](https://console.groq.com/docs/deprecations).)
 
 ---
 
 ## Benchmarks
 
-| Metric | Result |
+> ⚠️ **These numbers were measured on the old `llama-3.3-70b-versatile` model (deprecated 2026-08-16) and have not yet been re-measured on `openai/gpt-oss-120b`.** They are kept here for historical reference only — do not cite them as current performance. Re-running `measure_time.py` / `measure_hallucination.py` on the new model is a pending task.
+
+| Metric | Result (on the retired Llama 3.3 70B model) |
 |---|---|
 | Avg end-to-end pipeline time | **27.1s** across 4 benchmark queries |
 | QA unsupported claims flagged | **avg 3 per report** across 3 diverse topics |
@@ -79,7 +81,8 @@ Each agent is powered by **Llama 3.3 70B via Groq** and orchestrated using **Lan
 |---|---|
 | Agent Orchestration | LangGraph 1.2.6 |
 | Async Parallel Execution | Python asyncio + asyncio.gather |
-| LLM | Llama 3.3 70B via Groq API |
+| LLM | OpenAI GPT-OSS 120B via Groq API |
+| Reliability | tenacity 9.1.4 (retry/backoff on search + LLM calls) |
 | Web Search | Tavily Search API |
 | LLM Framework | LangChain 1.3.11 |
 | Frontend | Streamlit 1.58.0 |

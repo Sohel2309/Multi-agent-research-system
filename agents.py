@@ -1,24 +1,76 @@
 import os
+import logging
 import asyncio
+
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+
 from state import AgentState
-from tools import search_web
+from tools import search_web, SearchError, ConfigError
+
+logger = logging.getLogger(__name__)
 
 
 def get_llm():
     return ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         temperature=0,
-        max_tokens=600,
+        max_tokens=1024,
+        reasoning_effort="low",
         api_key=os.environ["GROQ_API_KEY"]
     )
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+async def _invoke_llm(llm, messages):
+    """Wraps every LLM call with retry/backoff. Groq's free tier is rate
+    limited (per the README), so a 429 or transient timeout here is expected
+    behavior, not an edge case. We deliberately retry on broad Exception
+    rather than trying to enumerate every SDK-specific error class, since
+    that mapping isn't guaranteed stable across langchain-groq versions --
+    documented trade-off, not an oversight.
+
+    openai/gpt-oss-120b is a reasoning model: max_tokens is shared between
+    its hidden chain-of-thought and the final answer. If the reasoning
+    consumes the whole budget, the API can return HTTP 200 with EMPTY
+    content instead of raising an error -- a silent-failure pattern
+    documented across multiple Groq/vLLM bug reports for gpt-oss models.
+    That would be the exact same class of bug already fixed for search
+    (Stage 1) if left unguarded, so we explicitly detect it and retry."""
+    response = await llm.ainvoke(messages)
+    if not response.content or not response.content.strip():
+        raise RuntimeError(
+            "LLM returned empty content (likely reasoning-token budget "
+            "exhausted before an answer was produced) -- retrying"
+        )
+    return response
 
 
 async def research_agent(state: AgentState) -> AgentState:
     print("\n🔍 Research Agent working...")
     query = state["query"]
-    search_results = search_web(query)
+
+    try:
+        search_results = search_web(query)
+    except (SearchError, ConfigError) as e:
+        # This is the critical, first search call -- if it fails, there is
+        # nothing for any downstream agent to work with. Stop the pipeline
+        # here via state["error"] instead of continuing with an empty or
+        # error-string "research_data" that would silently flow into a
+        # fabricated-looking report.
+        print(f"❌ Research Agent failed: {e}")
+        return {
+            "research_data": "",
+            "messages": [f"Research Agent: FAILED - {e}"],
+            "error": str(e),
+        }
+
     llm = get_llm()
     messages = [
         SystemMessage(content="""You are a research assistant.
@@ -32,8 +84,10 @@ Raw search results:
 
 Extract and summarize the key information about this topic.""")
     ]
-    response = await llm.ainvoke(messages)
+
+    response = await _invoke_llm(llm, messages)
     print("✅ Research complete.")
+
     return {
         "research_data": response.content,
         "messages": [f"Research Agent: Gathered data on '{query}'"],
@@ -57,13 +111,24 @@ Research Data:
 
 Provide a detailed analysis of this information.""")
     ]
-    response = await llm.ainvoke(messages)
+    response = await _invoke_llm(llm, messages)
     return response.content
 
 
 async def _extra_searcher_async(research_data: str, query: str, llm) -> str:
     enriched_query = query + " statistics data examples 2025"
-    search_results = search_web(enriched_query)
+
+    try:
+        search_results = search_web(enriched_query)
+    except (SearchError, ConfigError) as e:
+        # This search is NOT critical -- the writer agent can still produce
+        # a report from research_data + analysis alone. So we degrade
+        # gracefully instead of failing the whole pipeline: log it clearly
+        # and hand the writer an explicit "nothing found" note instead of
+        # crashing or silently injecting an error string as if it were data.
+        print(f"⚠️ Extra Search Agent failed (non-critical): {e}")
+        return f"[No additional statistics available -- extra search failed: {e}]"
+
     messages = [
         SystemMessage(content="""You are a data researcher.
 Find additional statistics, numbers, recent data points, and specific examples.
@@ -79,17 +144,19 @@ Additional search results:
 
 Extract only NEW statistics and specific examples not already covered.""")
     ]
-    response = await llm.ainvoke(messages)
+    response = await _invoke_llm(llm, messages)
     return response.content
 
 
 async def parallel_step(state: AgentState) -> AgentState:
     print("\n📊 Analyst + 🔎 Extra Search running in PARALLEL...")
     llm = get_llm()
+
     analysis, extra_context = await asyncio.gather(
         _analyst_async(state["research_data"], state["query"], llm),
         _extra_searcher_async(state["research_data"], state["query"], llm)
     )
+
     print("✅ Both parallel agents complete.")
     return {
         "analysis": analysis,
@@ -99,7 +166,7 @@ async def parallel_step(state: AgentState) -> AgentState:
 
 
 async def writer_agent(state: AgentState) -> AgentState:
-    print("\n✍️  Writer Agent working...")
+    print("\n✍️ Writer Agent working...")
     llm = get_llm()
     messages = [
         SystemMessage(content="""You are a professional report writer.
@@ -124,7 +191,7 @@ Additional Statistics and Examples:
 
 Write a comprehensive, professional report using ALL of the above.""")
     ]
-    response = await llm.ainvoke(messages)
+    response = await _invoke_llm(llm, messages)
     print("✅ Report written.")
     return {
         "report": response.content,
@@ -138,7 +205,6 @@ async def qa_agent(state: AgentState) -> AgentState:
     messages = [
         SystemMessage(content="""You are a strict fact-checker.
 Verify the report against its original source data.
-
 Output in this exact format:
 
 **Overall Verdict:** [PASS / PASS WITH WARNINGS / FAIL]
@@ -164,7 +230,7 @@ Report to Fact-Check:
 
 Fact-check this report against all source data.""")
     ]
-    response = await llm.ainvoke(messages)
+    response = await _invoke_llm(llm, messages)
     print("✅ QA check complete.")
     return {
         "qa_review": response.content,

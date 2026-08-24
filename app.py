@@ -160,6 +160,23 @@ if run_button:
             with st.spinner("4 agents working... (45–90 seconds)"):
                 result = run_research(query)
 
+            # The pipeline can now fail cleanly with state["error"] set
+            # (e.g. web search failed after 3 retries) instead of silently
+            # continuing to a fabricated report. Check for that BEFORE
+            # saving a session or rendering tabs, so a failed run doesn't
+            # get saved to history or shown with a misleading green
+            # "success" QA banner.
+            if result.get("error"):
+                progress_bar.progress(0)
+                status_text.text("❌ Research Agent could not complete.")
+                st.error(f"Research failed: {result['error']}")
+                st.info(
+                    "The search step failed after 3 retry attempts. This run was "
+                    "NOT saved to history, since there is no reliable data to save. "
+                    "Common fixes:\n- Check your TAVILY_API_KEY\n- Wait a bit if you hit a rate limit, then try again"
+                )
+                st.stop()
+
             progress_bar.progress(90)
             status_text.text("💾 Saving session...")
 
