@@ -8,6 +8,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 
 from state import AgentState
 from tools import search_web, SearchError, ConfigError
+from grounding import verify_report, format_grounding_report
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +233,30 @@ Fact-check this report against all source data.""")
     ]
     response = await _invoke_llm(llm, messages)
     print("✅ QA check complete.")
+
+    # Stage 3: deterministic grounding check against the sources this
+    # system already retrieved (research_data + extra_context). This is
+    # NOT another LLM call grading its own work -- it's separate from,
+    # and does not replace, the LLM-based qa_review above. See
+    # grounding.py for the full formula and its documented limitations.
+    sources_text = f"{state.get('research_data', '')}\n{state.get('extra_context', '')}"
+    grounding_result = verify_report(state["report"], sources_text)
+    grounding_report_text = format_grounding_report(grounding_result)
+    counts = grounding_result["counts"]
+    print(f"✅ Grounding check complete: score={grounding_result['grounding_score']} "
+          f"({counts['supported']} supported / {counts['partially_supported']} partial / "
+          f"{counts['unsupported']} unsupported)")
+
     return {
         "qa_review": response.content,
-        "messages": ["QA Agent: Fact-check complete"]
+        "grounding_report": grounding_report_text,
+        "grounding_score": grounding_result["grounding_score"],
+        "messages": [
+            "QA Agent: Fact-check complete",
+            f"Grounding Agent: {counts['supported']} supported / "
+            f"{counts['partially_supported']} partial / {counts['unsupported']} unsupported "
+            f"(score: {grounding_result['grounding_score']})",
+        ]
     }
 
 

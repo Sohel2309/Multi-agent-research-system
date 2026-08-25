@@ -117,6 +117,19 @@ if "loaded_session_id" in st.session_state:
                st.error(qa)
             else:
                st.success(qa)
+
+            # Stage 3: grounding score, if this session was saved after
+            # the grounding feature was added (older sessions have
+            # grounding_score = NULL / grounding_report = "" from the
+            # database migration in database.py -- handled gracefully).
+            grounding_report = row[7] if len(row) > 7 else ""
+            grounding_score = row[8] if len(row) > 8 else None
+            if grounding_report:
+                st.divider()
+                st.markdown("### 🔎 Grounding Check")
+                if grounding_score is not None:
+                    st.metric("Grounding Score", f"{grounding_score}%")
+                st.markdown(grounding_report)
         
         if st.button("✖️ Close this session"):
             st.session_state.pop("loaded_session_id", None)
@@ -185,7 +198,9 @@ if run_button:
                 research_data=result.get("research_data", ""),
                 analysis=result.get("analysis", ""),
                 report=result.get("report", ""),
-                qa_review=result.get("qa_review", "")
+                qa_review=result.get("qa_review", ""),
+                grounding_report=result.get("grounding_report", ""),
+                grounding_score=result.get("grounding_score")
             )
 
             progress_bar.progress(100)
@@ -228,6 +243,19 @@ if run_button:
                 else:
                     st.success(qa)
 
+                # Stage 3: deterministic grounding check, separate from
+                # the LLM-based QA verdict above -- see grounding.py for
+                # the formula. Shown here so unsupported claims are
+                # surfaced directly, not silently accepted.
+                grounding_score = result.get("grounding_score")
+                grounding_report = result.get("grounding_report", "")
+                if grounding_report:
+                    st.divider()
+                    st.markdown("### 🔎 Grounding Check")
+                    if grounding_score is not None:
+                        st.metric("Grounding Score", f"{grounding_score}%")
+                    st.markdown(grounding_report)
+
         except Exception as e:
             progress_bar.progress(0)
             status_text.text("❌ An error occurred.")
@@ -238,4 +266,4 @@ if run_button:
 # ─── FOOTER ───────────────────────────────────────────────────────────────────
 
 st.divider()
-st.caption("Built with LangGraph · LangChain · Groq (Llama 3.3 70B) · Tavily Search · Streamlit")
+st.caption("Built with LangGraph · LangChain · Groq (GPT-OSS 120B) · Tavily Search · Streamlit")
