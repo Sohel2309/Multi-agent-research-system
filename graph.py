@@ -40,6 +40,9 @@ def run_research(query: str) -> dict:
         "extra_context": "",
         "report": "",
         "qa_review": "",
+        "research_sources": [],
+        "source_quality_report": "",
+        "avg_source_quality": None,
         "messages": [],
         "error": ""
     }

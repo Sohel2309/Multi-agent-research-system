@@ -13,8 +13,40 @@ st.set_page_config(
 )
 
 # Import after env vars loaded
+import json
 from graph import run_research
 from database import init_db, save_session, get_all_sessions, get_session_by_id, delete_session
+
+
+def _render_sources_tab(sources_json_or_list, avg_quality, quality_report_text):
+    """Shared renderer for the Sources tab -- used for both a freshly
+    completed run and a session loaded from history. sources_json_or_list
+    can be a JSON string (from the DB) or an already-parsed list."""
+    if isinstance(sources_json_or_list, str):
+        try:
+            sources = json.loads(sources_json_or_list) if sources_json_or_list else []
+        except (json.JSONDecodeError, TypeError):
+            sources = []
+    else:
+        sources = sources_json_or_list or []
+
+    st.markdown("### 📚 Sources")
+    if not sources:
+        st.caption("No ranked source data available for this session.")
+        return
+
+    if avg_quality is not None:
+        st.metric("Average Source Quality", f"{avg_quality}")
+    if quality_report_text:
+        with st.expander("How this is calculated", expanded=False):
+            st.markdown(quality_report_text)
+
+    for s in sources:
+        tier = s.get("quality_tier", "Low")
+        badge = {"High": "🟢", "Medium": "🟡", "Low": "🔴"}.get(tier, "⚪")
+        with st.container(border=True):
+            st.markdown(f"{badge} **{tier}** · score `{s.get('quality_score')}` — [{s.get('title', 'Untitled')}]({s.get('url', '')})")
+            st.caption(s.get("content", "")[:280])
 
 # Initialize database on startup
 init_db()
@@ -95,7 +127,9 @@ if "loaded_session_id" in st.session_state:
     row = get_session_by_id(st.session_state["loaded_session_id"])
     if row:
         st.info(f"📂 Viewing past session: **{row[1]}** — {row[6]}")
-        tab1, tab2, tab3, tab4 = st.tabs(["📄 Final Report", "🔍 Research Data", "📊 Analysis", "✅ QA Review"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["📄 Final Report", "🔍 Research Data", "📊 Analysis", "✅ QA Review", "📚 Sources"]
+        )
 
         with tab1:
             st.markdown(row[4])
@@ -130,7 +164,13 @@ if "loaded_session_id" in st.session_state:
                 if grounding_score is not None:
                     st.metric("Grounding Score", f"{grounding_score}%")
                 st.markdown(grounding_report)
-        
+
+        with tab5:
+            source_quality_report = row[9] if len(row) > 9 else ""
+            avg_source_quality = row[10] if len(row) > 10 else None
+            research_sources = row[11] if len(row) > 11 else "[]"
+            _render_sources_tab(research_sources, avg_source_quality, source_quality_report)
+
         if st.button("✖️ Close this session"):
             st.session_state.pop("loaded_session_id", None)
             st.rerun()
@@ -200,7 +240,10 @@ if run_button:
                 report=result.get("report", ""),
                 qa_review=result.get("qa_review", ""),
                 grounding_report=result.get("grounding_report", ""),
-                grounding_score=result.get("grounding_score")
+                grounding_score=result.get("grounding_score"),
+                source_quality_report=result.get("source_quality_report", ""),
+                avg_source_quality=result.get("avg_source_quality"),
+                research_sources=result.get("research_sources", []),
             )
 
             progress_bar.progress(100)
@@ -213,7 +256,9 @@ if run_button:
                 for msg in result.get("messages", []):
                     st.markdown(f"- {msg}")
 
-            tab1, tab2, tab3, tab4 = st.tabs(["📄 Final Report", "🔍 Research Data", "📊 Analysis", "✅ QA Review"])
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(
+                ["📄 Final Report", "🔍 Research Data", "📊 Analysis", "✅ QA Review", "📚 Sources"]
+            )
 
             with tab1:
                 st.markdown("### 📄 Final Report")
@@ -255,6 +300,13 @@ if run_button:
                     if grounding_score is not None:
                         st.metric("Grounding Score", f"{grounding_score}%")
                     st.markdown(grounding_report)
+
+            with tab5:
+                _render_sources_tab(
+                    result.get("research_sources", []),
+                    result.get("avg_source_quality"),
+                    result.get("source_quality_report", ""),
+                )
 
         except Exception as e:
             progress_bar.progress(0)

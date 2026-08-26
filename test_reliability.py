@@ -105,7 +105,7 @@ class TestResearchAgentErrorPropagation(unittest.TestCase):
             raise tools.SearchError("simulated total search failure")
 
         with patch.object(agents, "get_llm", fake_get_llm), \
-             patch.object(agents, "search_web", failing_search):
+             patch.object(agents, "search_web_ranked", failing_search):
             result = asyncio.run(agents.research_agent({"query": "test", "error": ""}))
 
         self.assertNotEqual(result["error"], "", "state['error'] must be populated on failure")
@@ -133,7 +133,7 @@ class TestFullGraphStopsOnCriticalFailure(unittest.TestCase):
             raise tools.SearchError("simulated total search failure")
 
         with patch.object(agents, "get_llm", fake_get_llm), \
-             patch.object(agents, "search_web", failing_search):
+             patch.object(agents, "search_web_ranked", failing_search):
             result = graph.run_research("test query")
 
         self.assertNotEqual(result.get("error", ""), "")
@@ -153,10 +153,24 @@ class TestExtraSearchGracefulDegradation(unittest.TestCase):
             call_log.append(query)
             if "statistics data examples" in query:
                 raise tools.SearchError("simulated extra-search failure")
-            return "[1] Fake Title\nFake content\nSource: http://example.com"
+            # Stage 4: agents.py calls search_web_ranked(), which returns a
+            # dict ({"formatted", "sources", "avg_quality"}), not the plain
+            # string search_web() used to return -- the mock must match the
+            # real function's contract or it silently stops exercising the
+            # real code path (see fixed regression in test_benchmark_harness.py).
+            return {
+                "formatted": "[1] Fake Title\nFake content\nSource: http://example.com",
+                "sources": [{
+                    "title": "Fake Title", "url": "http://example.com",
+                    "content": "Fake content", "relevance": 0.5,
+                    "domain_trust": 0.5, "richness": 0.0,
+                    "quality_score": 0.5, "quality_tier": "medium",
+                }],
+                "avg_quality": 0.5,
+            }
 
         with patch.object(agents, "get_llm", fake_get_llm), \
-             patch.object(agents, "search_web", selective_failing_search):
+             patch.object(agents, "search_web_ranked", selective_failing_search):
             result = graph.run_research("test query")
 
         self.assertEqual(result.get("error", ""), "", "primary research succeeded, error should be empty")

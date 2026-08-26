@@ -261,6 +261,31 @@ def _dry_run_search_web(query: str, max_results: int = 5) -> str:
     return f"[DRY RUN fake search result for: {query}]\n[1] Fake Title\nFake content\nSource: http://example.com"
 
 
+def _dry_run_search_web_ranked(query: str, max_results: int = 5) -> dict:
+    """Stage 4: agents.py now calls search_web_ranked() instead of
+    search_web(), so the dry-run mock for the multi-agent pipeline must
+    return the same {"formatted", "sources", "avg_quality"} shape --
+    single_agent_baseline.py still calls plain search_web() unmodified
+    (see tools.search_web_ranked's docstring), so it keeps using
+    _dry_run_search_web above."""
+    fake_source = {
+        "title": "Fake Title",
+        "url": "http://example.com",
+        "content": "Fake content",
+        "relevance": 0.5,
+        "domain_trust": 0.5,
+        "richness": 0.0,
+        "quality_score": 0.35,
+        "quality_tier": "Low",
+    }
+    return {
+        "formatted": f"[DRY RUN fake search result for: {query}]\n"
+                     f"[1] (Low quality, score=0.35) Fake Title\nFake content\nSource: http://example.com",
+        "sources": [fake_source],
+        "avg_quality": 0.35,
+    }
+
+
 def _make_dry_run_get_llm():
     def _get_llm():
         return _DryRunFakeLLM()
@@ -294,7 +319,7 @@ async def run_benchmark(queries: list, trials: int, pipeline: str, dry_run: bool
     if dry_run:
         fake_get_llm = _make_dry_run_get_llm()
         with patch.object(agents, "get_llm", fake_get_llm), \
-             patch.object(agents, "search_web", _dry_run_search_web), \
+             patch.object(agents, "search_web_ranked", _dry_run_search_web_ranked), \
              patch.object(single_agent_baseline, "get_llm", fake_get_llm), \
              patch.object(single_agent_baseline, "search_web", _dry_run_search_web):
             return await _execute_all(queries, trials, pipeline)

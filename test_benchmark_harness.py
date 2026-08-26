@@ -63,6 +63,23 @@ def _fake_search(query, max_results=5):
     return "[1] Title\nContent\nSource: http://example.com"
 
 
+def _fake_search_ranked(query, max_results=5):
+    """Stage 4: agents.py's research_agent/_extra_searcher_async call
+    search_web_ranked(), not search_web() -- so tests exercising the real
+    graph must mock the dict-returning function, or they silently stop
+    testing what they claim to (see regression this fixes: the old
+    single-string mock became a no-op once the call site switched)."""
+    return {
+        "formatted": "[1] Title\nContent\nSource: http://example.com",
+        "sources": [{
+            "title": "Title", "url": "http://example.com", "content": "Content",
+            "relevance": 0.5, "domain_trust": 0.5, "richness": 0.0,
+            "quality_score": 0.5, "quality_tier": "medium",
+        }],
+        "avg_quality": 0.5,
+    }
+
+
 class TestCallbackTokenCapturePropagatesThroughRealGraph(unittest.TestCase):
     """The single most important correctness check for this stage: does
     config={"callbacks":[...]} passed to graph.ainvoke() actually reach
@@ -79,7 +96,7 @@ class TestCallbackTokenCapturePropagatesThroughRealGraph(unittest.TestCase):
 
         async def run():
             with patch.object(agents, "get_llm", fake_get_llm), \
-                 patch.object(agents, "search_web", _fake_search):
+                 patch.object(agents, "search_web_ranked", _fake_search_ranked):
                 return await compiled.ainvoke(
                     {"query": "test", "error": ""}, config={"callbacks": [cb]}
                 )
@@ -155,7 +172,7 @@ class TestBenchmarkFailureHandling(unittest.TestCase):
 
         async def run():
             with patch.object(agents, "get_llm", fake_get_llm), \
-                 patch.object(agents, "search_web", failing_search), \
+                 patch.object(agents, "search_web_ranked", failing_search), \
                  patch.object(single_agent_baseline, "get_llm", fake_get_llm), \
                  patch.object(single_agent_baseline, "search_web", failing_search):
                 return await benchmark._execute_all(["q1"], trials=1, pipeline="both")

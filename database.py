@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import json
 from datetime import datetime
 
 # Works locally and on Hugging Face Spaces
@@ -8,13 +9,14 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "sessions.db")
 
 def init_db():
     """Creates the sessions table if it does not exist, and migrates
-    older databases (pre-Stage-3) that already have a `sessions` table
-    but lack the grounding_report/grounding_score columns.
+    older databases that already have a `sessions` table but lack columns
+    added in later stages (Stage 3: grounding_report/grounding_score;
+    Stage 4: source_quality_report/avg_source_quality/research_sources).
 
     CREATE TABLE IF NOT EXISTS is a no-op on an existing table -- it does
     NOT add new columns to it -- so a separate PRAGMA table_info check +
     ALTER TABLE ADD COLUMN step is required for existing sessions.db
-    files to gain the new columns without losing any saved sessions.
+    files to gain new columns without losing any saved sessions.
     """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -28,7 +30,10 @@ def init_db():
             qa_review TEXT,
             created_at TEXT NOT NULL,
             grounding_report TEXT DEFAULT '',
-            grounding_score REAL
+            grounding_score REAL,
+            source_quality_report TEXT DEFAULT '',
+            avg_source_quality REAL,
+            research_sources TEXT DEFAULT '[]'
         )
     ''')
 
@@ -38,24 +43,38 @@ def init_db():
         c.execute("ALTER TABLE sessions ADD COLUMN grounding_report TEXT DEFAULT ''")
     if "grounding_score" not in existing_columns:
         c.execute("ALTER TABLE sessions ADD COLUMN grounding_score REAL")
+    if "source_quality_report" not in existing_columns:
+        c.execute("ALTER TABLE sessions ADD COLUMN source_quality_report TEXT DEFAULT ''")
+    if "avg_source_quality" not in existing_columns:
+        c.execute("ALTER TABLE sessions ADD COLUMN avg_source_quality REAL")
+    if "research_sources" not in existing_columns:
+        c.execute("ALTER TABLE sessions ADD COLUMN research_sources TEXT DEFAULT '[]'")
 
     conn.commit()
     conn.close()
 
 
 def save_session(query: str, research_data: str, analysis: str, report: str, qa_review: str,
-                  grounding_report: str = "", grounding_score=None) -> int:
+                  grounding_report: str = "", grounding_score=None,
+                  source_quality_report: str = "", avg_source_quality=None,
+                  research_sources=None) -> int:
     """Saves a completed research session. Returns the session ID.
 
-    grounding_report/grounding_score default to ""/None so any existing
-    caller that doesn't pass them (there are none in this codebase as of
-    Stage 3, but this keeps the function backward-compatible) still works.
+    grounding_report/grounding_score (Stage 3) and source_quality_report/
+    avg_source_quality/research_sources (Stage 4) all default to empty/
+    None so any existing caller that doesn't pass them still works.
+    research_sources (a list of dicts) is stored as a JSON string --
+    SQLite has no native list/dict column type.
     """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
-        INSERT INTO sessions (query, research_data, analysis, report, qa_review, created_at, grounding_report, grounding_score)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (
+            query, research_data, analysis, report, qa_review, created_at,
+            grounding_report, grounding_score,
+            source_quality_report, avg_source_quality, research_sources
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         query,
         research_data,
@@ -65,6 +84,9 @@ def save_session(query: str, research_data: str, analysis: str, report: str, qa_
         datetime.now().strftime('%Y-%m-%d %H:%M'),
         grounding_report,
         grounding_score,
+        source_quality_report,
+        avg_source_quality,
+        json.dumps(research_sources or []),
     ))
     conn.commit()
     session_id = c.lastrowid

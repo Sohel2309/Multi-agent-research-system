@@ -283,10 +283,23 @@ class TestFullGraphIntegration(unittest.TestCase):
         declaration were ever accidentally removed."""
 
         def fake_search(query, max_results=5):
-            return "[1] Title\nIBM announced a new 1000 qubit quantum processor in 2025.\nSource: http://x.com"
+            # Stage 4: agents.py calls search_web_ranked() (dict-returning),
+            # not search_web() (string-returning) -- patching search_web here
+            # would be a silent no-op (the real network-backed function would
+            # run instead). Must match the real function's contract.
+            return {
+                "formatted": "[1] Title\nIBM announced a new 1000 qubit quantum processor in 2025.\nSource: http://x.com",
+                "sources": [{
+                    "title": "Title", "url": "http://x.com",
+                    "content": "IBM announced a new 1000 qubit quantum processor in 2025.",
+                    "relevance": 0.5, "domain_trust": 0.5, "richness": 0.0,
+                    "quality_score": 0.5, "quality_tier": "medium",
+                }],
+                "avg_quality": 0.5,
+            }
 
         with patch.object(agents, "get_llm", fake_get_llm), \
-             patch.object(agents, "search_web", fake_search):
+             patch.object(agents, "search_web_ranked", fake_search):
             result = graph.run_research("test query")
 
         self.assertIn("grounding_score", result)
@@ -331,10 +344,21 @@ class TestFullGraphIntegration(unittest.TestCase):
             return ScriptedLLM()
 
         def fake_search(query, max_results=5):
-            return "[1] Title\nIBM announced a new 1000 qubit quantum processor in 2025.\nSource: http://x.com"
+            # Stage 4: same fix as above -- must match search_web_ranked()'s
+            # dict contract, not search_web()'s plain-string one.
+            return {
+                "formatted": "[1] Title\nIBM announced a new 1000 qubit quantum processor in 2025.\nSource: http://x.com",
+                "sources": [{
+                    "title": "Title", "url": "http://x.com",
+                    "content": "IBM announced a new 1000 qubit quantum processor in 2025.",
+                    "relevance": 0.5, "domain_trust": 0.5, "richness": 0.0,
+                    "quality_score": 0.5, "quality_tier": "medium",
+                }],
+                "avg_quality": 0.5,
+            }
 
         with patch.object(agents, "get_llm", scripted_get_llm), \
-             patch.object(agents, "search_web", fake_search):
+             patch.object(agents, "search_web_ranked", fake_search):
             result = graph.run_research("quantum computing")
 
         # state only exposes grounding_score (float) and grounding_report

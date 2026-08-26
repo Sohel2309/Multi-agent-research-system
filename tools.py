@@ -10,6 +10,8 @@ from tenacity import (
     before_sleep_log,
 )
 
+from source_ranking import rank_sources, average_quality, format_ranked_results
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,3 +93,45 @@ def search_web(query: str, max_results: int = 5) -> str:
             f"Search failed after 3 attempts for query '{query}': {e}"
         ) from e
     return _format_results(results)
+
+
+def search_web_ranked(query: str, max_results: int = 5) -> dict:
+    """Stage 4: same underlying search + retry/backoff behavior as
+    search_web() (same exceptions: SearchError, ConfigError), but instead
+    of throwing away Tavily's structured per-result data (title, url,
+    content, score), this scores and ranks each source deterministically
+    -- see source_ranking.py for the full formula and its documented
+    limitations.
+
+    search_web() is left completely unchanged and still returns a plain
+    string -- single_agent_baseline.py deliberately keeps using it
+    unmodified, so the multi-agent vs. single-agent benchmark (Stage 2)
+    stays a fair, controlled comparison rather than silently changing one
+    side's inputs.
+
+    Returns:
+        {
+          "formatted": str,   # ranked/annotated text, same shape research_agent
+                               # already feeds to the LLM
+          "sources": list,    # each: {title, url, content, relevance,
+                               # domain_trust, richness, quality_score, quality_tier},
+                               # sorted best-first
+          "avg_quality": float | None,  # None if there were no sources -- never
+                                         # fabricated as 0
+        }
+    """
+    try:
+        results = _search_with_retry(query, max_results)
+    except ConfigError:
+        raise
+    except Exception as e:
+        raise SearchError(
+            f"Search failed after 3 attempts for query '{query}': {e}"
+        ) from e
+
+    ranked = rank_sources(results)
+    return {
+        "formatted": format_ranked_results(ranked),
+        "sources": ranked,
+        "avg_quality": average_quality(ranked),
+    }

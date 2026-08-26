@@ -7,8 +7,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from state import AgentState
-from tools import search_web, SearchError, ConfigError
+from tools import search_web, search_web_ranked, SearchError, ConfigError
 from grounding import verify_report, format_grounding_report
+from source_ranking import merge_ranked_sources, average_quality, format_quality_report
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,13 @@ async def research_agent(state: AgentState) -> AgentState:
     query = state["query"]
 
     try:
-        search_results = search_web(query)
+        # Stage 4: search_web_ranked() has identical retry/exception
+        # behavior to search_web() (SearchError/ConfigError), but also
+        # returns the per-source quality-ranked structured data -- see
+        # source_ranking.py. search_results["formatted"] is the same
+        # shape of text search_web() used to return, just sorted
+        # best-source-first and annotated with a quality tag.
+        search_results = search_web_ranked(query)
     except (SearchError, ConfigError) as e:
         # This is the critical, first search call -- if it fails, there is
         # nothing for any downstream agent to work with. Stop the pipeline
@@ -68,6 +75,7 @@ async def research_agent(state: AgentState) -> AgentState:
         print(f"❌ Research Agent failed: {e}")
         return {
             "research_data": "",
+            "research_sources": [],
             "messages": [f"Research Agent: FAILED - {e}"],
             "error": str(e),
         }
@@ -81,7 +89,7 @@ Format your output clearly with bullet points."""),
         HumanMessage(content=f"""Topic: {query}
 
 Raw search results:
-{search_results}
+{search_results['formatted']}
 
 Extract and summarize the key information about this topic.""")
     ]
@@ -91,6 +99,7 @@ Extract and summarize the key information about this topic.""")
 
     return {
         "research_data": response.content,
+        "research_sources": search_results["sources"],
         "messages": [f"Research Agent: Gathered data on '{query}'"],
         "error": ""
     }
@@ -116,11 +125,20 @@ Provide a detailed analysis of this information.""")
     return response.content
 
 
-async def _extra_searcher_async(research_data: str, query: str, llm) -> str:
+async def _extra_searcher_async(research_data: str, query: str, llm) -> dict:
+    """Returns {"extra_context": str, "extra_sources": list}. Ranking
+    (Stage 4) fixes a real, demonstrable bug in the 600-char truncation
+    two lines below: research_data[:600] can cut off a genuinely strong
+    source before this prompt ever gets to it if a weaker source happened
+    to be summarized first. That truncation itself is unchanged here --
+    ranking doesn't remove the 600-char cutoff, it just makes what
+    research_agent puts INTO research_data (and therefore into this
+    window) sorted best-source-first, so the strongest material is the
+    material most likely to survive the cutoff."""
     enriched_query = query + " statistics data examples 2025"
 
     try:
-        search_results = search_web(enriched_query)
+        search_results = search_web_ranked(enriched_query)
     except (SearchError, ConfigError) as e:
         # This search is NOT critical -- the writer agent can still produce
         # a report from research_data + analysis alone. So we degrade
@@ -128,7 +146,10 @@ async def _extra_searcher_async(research_data: str, query: str, llm) -> str:
         # and hand the writer an explicit "nothing found" note instead of
         # crashing or silently injecting an error string as if it were data.
         print(f"⚠️ Extra Search Agent failed (non-critical): {e}")
-        return f"[No additional statistics available -- extra search failed: {e}]"
+        return {
+            "extra_context": f"[No additional statistics available -- extra search failed: {e}]",
+            "extra_sources": [],
+        }
 
     messages = [
         SystemMessage(content="""You are a data researcher.
@@ -141,28 +162,58 @@ Already gathered research:
 {research_data[:600]}
 
 Additional search results:
-{search_results}
+{search_results['formatted']}
 
 Extract only NEW statistics and specific examples not already covered.""")
     ]
     response = await _invoke_llm(llm, messages)
-    return response.content
+    return {
+        "extra_context": response.content,
+        "extra_sources": search_results["sources"],
+    }
 
 
 async def parallel_step(state: AgentState) -> AgentState:
     print("\n📊 Analyst + 🔎 Extra Search running in PARALLEL...")
     llm = get_llm()
 
-    analysis, extra_context = await asyncio.gather(
+    analysis, extra_result = await asyncio.gather(
         _analyst_async(state["research_data"], state["query"], llm),
         _extra_searcher_async(state["research_data"], state["query"], llm)
     )
 
-    print("✅ Both parallel agents complete.")
+    # Stage 4: combine the primary-search sources (research_agent, earlier
+    # node -- carried here via state["research_sources"]) with this step's
+    # extra-search sources into one deduplicated view, sorted by their
+    # already-computed quality_score. merge_ranked_sources() (NOT
+    # rank_sources()) is used deliberately -- both lists are already
+    # scored, and re-running rank_sources() on already-scored dicts would
+    # silently reset every source's relevance to the neutral 0.5 default
+    # (see source_ranking.py's merge_ranked_sources docstring).
+    combined_ranked = merge_ranked_sources(
+        state.get("research_sources", []), extra_result["extra_sources"]
+    )
+    quality_report = format_quality_report(combined_ranked, label="Research Sources")
+    avg_quality = average_quality(combined_ranked)
+
+    print(f"✅ Both parallel agents complete. Source quality: avg={avg_quality} "
+          f"across {len(combined_ranked)} unique sources")
+
     return {
         "analysis": analysis,
-        "extra_context": extra_context,
-        "messages": ["Analyst Agent + Extra Search Agent: Completed in parallel"]
+        "extra_context": extra_result["extra_context"],
+        # Overwrites the primary-only list research_agent set with the
+        # final combined (primary + extra, deduplicated) list -- LangGraph
+        # merges plain (non-reducer) state keys by last-write-wins, and
+        # parallel_step runs after research_agent, so this is the value
+        # that survives into the final result / gets saved to the DB.
+        "research_sources": combined_ranked,
+        "source_quality_report": quality_report,
+        "avg_source_quality": avg_quality,
+        "messages": [
+            "Analyst Agent + Extra Search Agent: Completed in parallel",
+            f"Source Ranking: {len(combined_ranked)} unique sources, avg quality {avg_quality}",
+        ]
     }
 
 
