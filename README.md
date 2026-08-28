@@ -1,157 +1,393 @@
-# 🤖 Multi-Agent Research & Report System
+# Multi-Agent Research & Report System
 
-A production-grade AI research platform where **5 specialized agents** collaborate to research any topic, generate a structured professional report, and automatically fact-check the output — all in **avg 27 seconds**.
+A multi-agent AI research system that transforms a natural-language question into a structured, evidence-backed research report.
 
-**Live Demo →** [huggingface.co/spaces/Sohel2309/multi-agent-research](https://huggingface.co/spaces/Sohel2309/multi-agent-research)
+The system uses **LangGraph** to orchestrate five specialized stages: research, analysis, additional evidence gathering, report generation, and quality/grounding verification.
 
----
-
-## The Problem
-
-Researching any topic properly takes hours — searching multiple sources, reading articles, extracting key facts, analyzing patterns, writing a structured summary, and then verifying the information is actually accurate.
-
-Most people either skip steps (shallow research) or spend 4–6 hours doing it manually.
-
-This system automates the entire pipeline in **under 90 seconds** using 5 specialized AI agents — each handling one stage of the research process, with the final agent fact-checking everything before you see it.
+**Author:** Sohel Bhongade — B.Tech, IIT Indore
 
 ---
 
-## How It Works
+## Overview
 
+Traditional LLM-based research often relies on a single model call to search for information and generate an answer. This can make it difficult to separate research from analysis, verify claims, and evaluate the quality of retrieved sources.
+
+This project explores a structured alternative:
+
+> **Decompose research into specialized agents, then verify the generated report against the collected evidence.**
+
+The pipeline performs web research, independently analyzes the evidence, performs additional targeted searching, generates the final report, and evaluates its claims and sources.
+
+---
+
+## Architecture
+
+```text
+                         User Query
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │  Research Agent   │
+                    │  Web Search       │
+                    └─────────┬─────────┘
+                              │
+                 ┌────────────┴────────────┐
+                 │                         │
+                 ▼                         ▼
+        ┌─────────────────┐       ┌─────────────────┐
+        │ Analyst Agent   │       │ Extra Search    │
+        │ Evidence        │       │ Agent           │
+        │ Analysis        │       │ More Evidence   │
+        └────────┬────────┘       └────────┬────────┘
+                 │                         │
+                 └────────────┬────────────┘
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │   Writer Agent    │
+                    │ Structured Report │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │     QA Agent      │
+                    │ Report Validation │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │ Grounding /       │
+                    │ Source Evaluation │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                       Final Report
 ```
-User Query
-    ↓
-🔍 Research Agent              →  Searches live web, extracts key facts
-    ↓              ↘
-📊 Analyst Agent    🔎 Extra Search Agent    ← run in PARALLEL (asyncio.gather)
-    ↓              ↙
-✍️  Writer Agent               →  Writes structured professional report
-    ↓
-✅ QA Agent                    →  Fact-checks report against source data
-    ↓
-Final Report + Verdict (PASS / PASS WITH WARNINGS / FAIL)
-```
 
-After the Research Agent finishes, the Analyst Agent and Extra Search Agent run **simultaneously** via `asyncio.gather` — one analyzes the findings while the other gathers additional statistics. The Writer Agent waits for both, then produces a richer report using all gathered context.
+### Agent responsibilities
 
-Each agent is powered by **OpenAI GPT-OSS 120B via Groq** and orchestrated using **LangGraph** state machines with conditional routing and shared state management. (Originally built on Llama 3.3 70B; migrated after Groq deprecated that model on 2026-08-16 — see [Groq's deprecation notice](https://console.groq.com/docs/deprecations).)
-
----
-
-## Benchmarks
-
-> ⚠️ **These numbers were measured on the old `llama-3.3-70b-versatile` model (deprecated 2026-08-16) and have not yet been re-measured on `openai/gpt-oss-120b`.** They are kept here for historical reference only — do not cite them as current performance. Re-running `measure_time.py` / `measure_hallucination.py` on the new model is a pending task.
-
-| Metric | Result (on the retired Llama 3.3 70B model) |
+| Stage | Responsibility |
 |---|---|
-| Avg end-to-end pipeline time | **27.1s** across 4 benchmark queries |
-| QA unsupported claims flagged | **avg 3 per report** across 3 diverse topics |
-| Parallel execution | Analyst + Extra Search fire concurrently via `asyncio.gather` |
-| Topics tested | Quantum Computing · Remote Work · EV in India · Social Media |
+| **Research Agent** | Performs initial web research and collects relevant sources |
+| **Analyst Agent** | Analyzes and synthesizes the retrieved evidence |
+| **Extra Search Agent** | Performs additional targeted searches to fill evidence gaps |
+| **Writer Agent** | Converts the research into a structured report |
+| **QA Agent** | Reviews the generated report for quality and consistency |
+| **Grounding** | Checks report claims against the available evidence |
+| **Source Evaluation** | Calculates source-quality information for the research set |
+
+The Analyst and Extra Search stages run in parallel to avoid unnecessary sequential execution.
 
 ---
 
-## Agent Architecture
+## Key Features
 
-| Agent | Role | Input | Output |
-|---|---|---|---|
-| 🔍 Research Agent | Live web search + extraction | User query | Key facts & statistics |
-| 📊 Analyst Agent | Pattern analysis (parallel) | Research data | Insights & implications |
-| 🔎 Extra Search Agent | Additional data gathering (parallel) | Research data | Extra statistics & examples |
-| ✍️ Writer Agent | Report generation | Research + Analysis + Extra context | Structured markdown report |
-| ✅ QA Agent | Fact verification | Report + All sources | Verdict + flagged claims |
+### 🔎 Multi-Agent Research
+
+Instead of relying on one LLM call, the system separates research responsibilities across specialized stages.
+
+### 🌐 Live Web Search
+
+Research is grounded in information retrieved from the web using **Tavily**.
+
+### 🧠 Evidence Analysis
+
+Retrieved sources are analyzed separately from report generation, reducing the dependence on a single generation step.
+
+### 🔄 Parallel Processing
+
+The Analyst and Extra Search agents execute in parallel within the LangGraph workflow.
+
+### ✍️ Structured Report Generation
+
+The Writer Agent converts the collected evidence into a readable research report.
+
+### ✅ Automated QA
+
+A dedicated QA stage reviews the generated report before completion.
+
+### 🎯 Claim-Level Grounding
+
+The system extracts report claims and evaluates whether they are:
+
+- Supported
+- Partially supported
+- Unsupported
+
+### 📚 Source Quality Evaluation
+
+Retrieved sources are evaluated and assigned source-quality scores.
+
+### 💾 Research History
+
+Research sessions can be stored and revisited through the application's session/history functionality.
+
+### 📄 Export
+
+Generated reports can be exported in Markdown format.
 
 ---
 
-## Features
+## Technology Stack
 
-- **5-agent LangGraph pipeline** with async parallel execution, conditional routing, and shared state
-- **Live web search** via Tavily API — real-time data, not stale training knowledge
-- **Async parallel execution** — Analyst and Extra Search agents run simultaneously via `asyncio.gather`; benchmarked at **27.1s avg** end-to-end
-- **Automated fact-checking** — QA agent cross-verifies every report claim against source data; flags avg **3 unsupported claims per report** with PASS / PASS WITH WARNINGS / FAIL verdict
-- **Session history** — every report saved to SQLite, accessible and downloadable from sidebar at any time
-- **4-tab result view** — Final Report / Research Data / Analysis / QA Review
-- **Markdown download** — export any report as a `.md` file instantly
-
----
-
-## Tech Stack
-
-| Layer | Technology |
+| Component | Technology |
 |---|---|
-| Agent Orchestration | LangGraph 1.2.6 |
-| Async Parallel Execution | Python asyncio + asyncio.gather |
-| LLM | OpenAI GPT-OSS 120B via Groq API |
-| Reliability | tenacity 9.1.4 (retry/backoff on search + LLM calls) |
-| Web Search | Tavily Search API |
-| LLM Framework | LangChain 1.3.11 |
-| Frontend | Streamlit 1.58.0 |
-| Session Storage | SQLite |
+| Agent orchestration | LangGraph |
+| LLM inference | Groq |
+| Model | OpenAI GPT-OSS-120B |
+| Web search | Tavily |
+| Frontend | Streamlit |
+| Storage | SQLite |
 | Deployment | Hugging Face Spaces |
+| Language | Python |
 
 ---
 
-## Run Locally
+# Evaluation
 
-**1. Clone the repository**
-```bash
-git clone https://github.com/Sohel2309/Multi-agent-research-system.git
-cd Multi-agent-research-system
-```
+The system was evaluated against a **single-agent baseline** using the same six research questions for both pipelines.
 
-**2. Create and activate a virtual environment**
-```bash
-python -m venv venv
+### Benchmark design
 
-# Windows
-venv\Scripts\activate
+- **6 paired real-world queries**
+- **1 trial per query**
+- Same query presented to both pipelines
+- 5 LLM calls per multi-agent run
+- 1 LLM call per single-agent run
+- Rate-limit failures were excluded from paired performance calculations
+- Results are **directional**, not statistically significant
 
-# macOS/Linux
-source venv/bin/activate
-```
+### Benchmark results
 
-**3. Install dependencies**
-```bash
-pip install -r requirements.txt
-```
+| Metric | Multi-Agent | Single-Agent |
+|---|---:|---:|
+| Paired success rate | **6/6 (100%)** | **6/6 (100%)** |
+| Average total tokens | **15,905** | **5,272** |
+| Average cost / run | **$0.0045** | **$0.0013** |
+| LLM calls / run | **5** | **1** |
+| Average report length | **3,893 chars** | **3,954 chars** |
+| Average latency | **98.98s** | **27.09s** |
 
-**4. Configure API keys**
+The multi-agent pipeline therefore used approximately:
 
-Create a `.env` file in the project root:
-```
-GROQ_API_KEY=your_groq_api_key
-TAVILY_API_KEY=your_tavily_api_key
-```
+- **3.0× the tokens**
+- **3.6× the cost**
 
-Both APIs offer free tiers — no credit card needed.
+while producing reports of approximately the same length.
 
-**5. Run the application**
-```bash
-streamlit run app.py
-```
+This demonstrates the computational cost of the multi-stage architecture rather than claiming that multi-agent processing is universally superior.
 
-Open `http://localhost:8501` in your browser.
+---
+
+## Grounding & Source Evaluation
+
+Across the six successful multi-agent runs:
+
+### Claim-level verification
+
+**181 total claims**
+
+- **149 supported — 82.3%**
+- **26 partially supported — 14.4%**
+- **6 unsupported — 3.3%**
+
+### Grounding
+
+**Average grounding score: 89.2 / 100**
+
+Range across queries:
+
+**85.7 – 93.1**
+
+### Source quality
+
+**Average source-quality score: 0.79 / 1.00**
+
+Range:
+
+**0.759 – 0.861**
+
+These metrics describe the behavior of the project's internal grounding and source-evaluation pipeline. They should **not** be interpreted as externally validated factual accuracy.
+
+---
+
+## What the Evaluation Shows
+
+The benchmark demonstrates that the multi-agent architecture:
+
+1. Successfully completes end-to-end research workflows across multiple topics.
+2. Adds explicit claim-level grounding and source-quality evaluation.
+3. Produces an auditable breakdown of supported, partially supported, and unsupported claims.
+4. Introduces a measurable computational trade-off compared with a single-call baseline.
+5. Maintains approximately equivalent final report length despite the additional processing stages.
+
+The experiment does **not** establish that the multi-agent system is universally more accurate or more useful than a single-agent system.
+
+The grounding score is internally computed and was not validated against an independent human fact-checking benchmark.
+
+---
+
+## Example Research Topics
+
+The benchmark included:
+
+- Latest developments in quantum computing
+- Impact of remote work on employee productivity
+- How CRISPR gene editing works
+- Comparison of solar vs. wind renewable energy
+- Effects of social media on teenage mental health
+- Current state of autonomous vehicle technology
 
 ---
 
 ## Project Structure
 
+```text
+multi_agent_research/
+│
+├── app.py
+├── graph.py
+├── agents.py
+├── grounding.py
+├── single_agent_baseline.py
+├── benchmark.py
+├── eval_full_capture.py
+├── benchmark_queries.py
+├── tools.py
+│
+├── eval_results/
+│   └── *.jsonl
+│
+├── database/
+│   └── ...
+│
+└── README.md
 ```
-multi-agent-research-system/
-├── state.py          # Shared state definition (AgentState TypedDict)
-├── tools.py          # Tavily web search wrapper
-├── agents.py         # All 5 agent functions with async support
-├── graph.py          # LangGraph pipeline with asyncio parallel execution
-├── database.py       # SQLite session storage (CRUD)
-├── app.py            # Streamlit UI
-└── requirements.txt  # Pinned dependencies
+
+---
+
+## Installation
+
+### 1. Clone the repository
+
+```bash
+git clone <repository-url>
+cd multi_agent_research
 ```
+
+### 2. Create and activate a virtual environment
+
+```bash
+python -m venv .venv
+```
+
+Windows:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### 3. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configure API keys
+
+Create a `.env` file:
+
+```env
+GROQ_API_KEY=your_groq_api_key
+TAVILY_API_KEY=your_tavily_api_key
+```
+
+### 5. Run the application
+
+```bash
+streamlit run app.py
+```
+
+---
+
+## Benchmarking
+
+The repository includes the evaluation infrastructure used to compare the multi-agent system against the single-agent baseline.
+
+Example:
+
+```powershell
+python eval_full_capture.py `
+  --query-indices 0,1,2,3,4,5 `
+  --trials 1 `
+  --pipeline multi `
+  --token-budget 90000
+```
+
+Results are written incrementally to:
+
+```text
+eval_results/
+```
+
+The incremental JSONL format ensures completed evaluations remain available even if a later run encounters an API or rate-limit failure.
+
+---
+
+## Limitations
+
+This is an engineering evaluation rather than a statistically rigorous research benchmark.
+
+### Small benchmark
+
+Only six queries were evaluated, so the results should be considered directional.
+
+### Single trial
+
+Each query was executed once per pipeline. Variance across repeated runs was therefore not measured.
+
+### Grounding validation
+
+The grounding score is produced by the project's own verification logic and has not been independently validated against human annotations.
+
+### Latency variability
+
+API rate limits and external service conditions can affect latency. Therefore, latency should not be treated as a clean architectural measurement.
+
+### No ablation study
+
+The benchmark does not isolate the individual contribution of every stage. In particular, it does not independently establish how much Stage 3/4 improves grounding compared with a pipeline without those stages.
+
+---
+
+## Future Work
+
+- Run repeated trials to measure variance and confidence intervals.
+- Add a human-annotated factuality benchmark.
+- Perform ablation studies on individual agents.
+- Compare different LLM models and configurations.
+- Improve handling of API rate limits and retries.
+- Evaluate report quality using human or task-specific scoring.
+- Explore adaptive agent routing to reduce unnecessary LLM calls.
+- Investigate whether all five agent stages are required for different query types.
+
+---
+
+## Deployment
+
+The application is deployed as a Streamlit application on Hugging Face Spaces.
+
+**Live Demo:** `<Hugging Face Space URL>`
 
 ---
 
 ## Author
 
-**Sohel Bhongade**
-B.Tech, IIT Indore
+**Sohel Bhongade**  
+B.Tech — IIT Indore
 
-[GitHub](https://github.com/Sohel2309) · [Live Demo](https://huggingface.co/spaces/Sohel2309/multi-agent-research)
+---
+
+## License
+
+See `LICENSE` for details.
